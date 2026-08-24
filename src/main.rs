@@ -56,13 +56,15 @@ const PROCESS_SUBSTRING: &str = "agent";
 ///
 /// Регистр значения не имеет.
 const EXCLUDED_PROCESSES: &[&str] = &[
-    "my_agent.exe",
-    "test_agent.exe",
+    "v4v_agent.exe",
+    "klnagent.exe",
+    "hvdagent.exe",
+    "ssh-agent.exe",
 ];
 
 
 /// Интервал проверки процессов в секундах.
-const CHECK_INTERVAL_SECONDS: u64 = 1;
+const CHECK_INTERVAL_SECONDS: u64 = 7;
 
 
 /// Название приложения.
