@@ -1,10 +1,14 @@
 ﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config;
+
 use std::{
+    process,
     thread,
     time::Duration,
 };
 
+use config::Settings;
 use sysinfo::{ProcessesToUpdate, System};
 
 use tray_icon::{
@@ -26,46 +30,8 @@ use winit::{
 
 
 // ============================================================
-// НАСТРОЙКИ
+// КОНСТАНТЫ ПРИЛОЖЕНИЯ
 // ============================================================
-
-/// Подстрока, которую ищем в имени процесса.
-///
-/// Например:
-///
-/// "agent"
-///
-/// Найдет:
-///     agent.exe
-///     my_agent.exe
-///     AgentService.exe
-///     test-agent-worker.exe
-///
-/// Поиск регистронезависимый.
-const PROCESS_SUBSTRING: &str = "agent";
-
-
-/// Процессы, которые нужно игнорировать.
-///
-/// Здесь указываются полные имена процессов, включая .exe.
-///
-/// Например:
-///
-/// "my_agent.exe"
-/// "test_agent.exe"
-///
-/// Регистр значения не имеет.
-const EXCLUDED_PROCESSES: &[&str] = &[
-    "v4v_agent.exe",
-    "klnagent.exe",
-    "hvdagent.exe",
-    "ssh-agent.exe",
-];
-
-
-/// Интервал проверки процессов в секундах.
-const CHECK_INTERVAL_SECONDS: u64 = 7;
-
 
 /// Название приложения.
 const APP_NAME: &str = "Process Checker";
@@ -101,15 +67,17 @@ enum AppEvent {
 ///
 /// Условия:
 ///
-/// 1. Имя процесса содержит PROCESS_SUBSTRING.
-/// 2. Процесс не входит в EXCLUDED_PROCESSES.
+/// 1. Имя процесса содержит process_substring из config.toml.
+/// 2. Процесс не входит в excluded_processes из config.toml.
 ///
 /// Поиск регистронезависимый.
-fn find_target_process(system: &System) -> Option<String> {
+fn find_target_process(
+    system: &System,
+    settings: &Settings,
+) -> Option<String> {
 
-    // Приводим строку поиска к lowercase.
     let search_string =
-        PROCESS_SUBSTRING.to_lowercase();
+        &settings.process_substring;
 
 
     for process in system.processes().values() {
@@ -127,7 +95,7 @@ fn find_target_process(system: &System) -> Option<String> {
         // Проверяем наличие искомой подстроки
         // ----------------------------------------------------
 
-        if !process_name_lower.contains(&search_string) {
+        if !process_name_lower.contains(search_string) {
             continue;
         }
 
@@ -137,12 +105,12 @@ fn find_target_process(system: &System) -> Option<String> {
         // ----------------------------------------------------
 
         let is_excluded =
-            EXCLUDED_PROCESSES
+            settings.excluded_processes
                 .iter()
                 .any(|excluded| {
 
                     process_name_lower
-                        == excluded.to_lowercase()
+                        == *excluded
                 });
 
 
@@ -169,7 +137,45 @@ fn find_target_process(system: &System) -> Option<String> {
 // WINDOWS MESSAGE BOX
 // ============================================================
 
-fn show_process_message(process_name: &str) {
+fn show_configuration_error(error: &str) {
+
+    let title: Vec<u16> =
+        format!("{APP_NAME}\0")
+            .encode_utf16()
+            .collect();
+
+
+    let message: Vec<u16> =
+        format!("Ошибка загрузки config.toml:\n\n{error}\0")
+            .encode_utf16()
+            .collect();
+
+
+    unsafe {
+
+        windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
+
+            None,
+
+            windows::core::PCWSTR(
+                message.as_ptr()
+            ),
+
+            windows::core::PCWSTR(
+                title.as_ptr()
+            ),
+
+            windows::Win32::UI::WindowsAndMessaging::MB_OK
+                |
+            windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+        );
+    }
+}
+
+fn show_process_message(
+    process_name: &str,
+    process_substring: &str,
+) {
 
     let title: Vec<u16> =
         format!("{APP_NAME}\0")
@@ -181,7 +187,7 @@ fn show_process_message(process_name: &str) {
         format!(
             "Обнаружен процесс:\n\n{}\n\nПоиск: \"{}\"",
             process_name,
-            PROCESS_SUBSTRING
+            process_substring
         )
         .encode_utf16()
         .chain(std::iter::once(0))
@@ -287,6 +293,10 @@ struct App {
     /// Proxy для отправки событий
     /// из других потоков в EventLoop.
     proxy: EventLoopProxy<AppEvent>,
+
+
+    /// Настройки, загруженные из config.toml.
+    settings: Settings,
 
 
     /// Чтобы мониторинг был запущен только один раз.
@@ -415,6 +425,9 @@ impl ApplicationHandler<AppEvent> for App {
         let proxy =
             self.proxy.clone();
 
+        let settings =
+            self.settings.clone();
+
 
         thread::spawn(move || {
 
@@ -449,7 +462,8 @@ impl ApplicationHandler<AppEvent> for App {
 
                 let found_process =
                     find_target_process(
-                        &system
+                        &system,
+                        &settings,
                     );
 
 
@@ -493,7 +507,7 @@ impl ApplicationHandler<AppEvent> for App {
 
                 thread::sleep(
                     Duration::from_secs(
-                        CHECK_INTERVAL_SECONDS
+                        settings.check_interval_seconds
                     )
                 );
             }
@@ -523,7 +537,8 @@ impl ApplicationHandler<AppEvent> for App {
             } => {
 
                 show_process_message(
-                    &name
+                    &name,
+                    &self.settings.process_substring,
                 );
             }
 
@@ -597,6 +612,14 @@ impl ApplicationHandler<AppEvent> for App {
 
 fn main() {
 
+    let settings =
+        Settings::load()
+            .unwrap_or_else(|error| {
+                show_configuration_error(&error);
+                process::exit(1);
+            });
+
+
     // --------------------------------------------------------
     // Создаём EventLoop.
     // --------------------------------------------------------
@@ -628,6 +651,8 @@ fn main() {
             tray_icon: None,
 
             proxy,
+
+            settings,
 
             monitoring_started: false,
         };

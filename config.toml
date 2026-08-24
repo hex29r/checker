@@ -1,0 +1,7 @@
+process_substring = "agent"
+check_interval_seconds = 1
+
+excluded_processes = [
+    "my_agent.exe",
+    "test_agent.exe",
+]
